@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Upload, Key, AlertTriangle, Check, Loader2, Lock } from 'lucide-react';
+import { Upload, Key, AlertTriangle, Check, Loader2, Lock, Copy } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { uploadFile, DriveFile } from '@/lib/google-drive';
 import { useToast } from '@/hooks/use-toast';
@@ -92,6 +92,8 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
   };
 
   if (uploadedFile) {
+    const shareUrl = uploadedFile.webContentLink || uploadedFile.webViewLink || `https://drive.google.com/file/d/${uploadedFile.id}/view`;
+    
     return (
       <Card className="bg-card">
         <CardHeader>
@@ -103,13 +105,38 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
         <CardContent className="space-y-4">
           <div className="rounded-lg bg-accent p-4">
             <p className="text-sm font-medium mb-2">File: {uploadedFile.appProperties?.originalName || uploadedFile.name}</p>
-            <p className="text-sm text-muted-foreground mb-2">
+            <p className="text-sm text-muted-foreground mb-4">
               Encrypted and saved in your Keyvault folder
             </p>
-            <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted p-3 rounded">
+            
+            <div className="space-y-2">
+              <Label className="text-xs">Share this Google Drive link:</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={shareUrl}
+                  readOnly
+                  className="font-mono text-xs"
+                />
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    navigator.clipboard.writeText(shareUrl);
+                    toast({
+                      title: 'Link copied!',
+                      description: 'Share this link along with your encryption key.',
+                    });
+                  }}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            
+            <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted p-3 rounded mt-3">
               <Lock className="h-4 w-4 mt-0.5 flex-shrink-0" />
               <p>
-                Remember your encryption key! You'll need it to decrypt and download this file later.
+                Share this link AND your encryption key with anyone who needs to download the file. 
+                They can decrypt it at <code className="bg-background px-1 rounded">/download</code>
               </p>
             </div>
           </div>
@@ -117,7 +144,8 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
           <Alert>
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
-              Your file is encrypted with AES-256. Without your encryption key, the file cannot be recovered.
+              The file is publicly accessible but remains encrypted. Anyone with the link AND the correct 
+              encryption key can download and decrypt it.
             </AlertDescription>
           </Alert>
 

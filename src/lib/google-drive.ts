@@ -1,4 +1,23 @@
-// Google Drive API utilities with encryption
+export const setFilePublic = async (accessToken: string, fileId: string): Promise<void> => {
+  const response = await fetch(
+    `${DRIVE_API_BASE}/files/${fileId}/permissions`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        role: 'reader',
+        type: 'anyone',
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error('Failed to set file permissions');
+  }
+};// Google Drive API utilities with encryption
 
 import { encryptFile, decryptFile, uint8ArrayToBase64, base64ToUint8Array } from './encryption';
 
@@ -104,15 +123,20 @@ export const uploadFile = async (
   // Get or create Keyvault folder
   const folderId = await getOrCreateKeyvaultFolder(accessToken);
   
+  // Encode salt and IV in filename
+  const saltBase64 = uint8ArrayToBase64(salt);
+  const ivBase64 = uint8ArrayToBase64(iv);
+  const encodedFilename = `${file.name}_${saltBase64}_${ivBase64}.encrypted`;
+  
   // Create file metadata with encryption info
   const metadata = {
-    name: file.name + '.encrypted',
+    name: encodedFilename,
     parents: [folderId],
     appProperties: {
       originalName: file.name,
       uploaderId: userId,
-      salt: uint8ArrayToBase64(salt),
-      iv: uint8ArrayToBase64(iv),
+      salt: saltBase64,
+      iv: ivBase64,
       encryptedWith: 'AES-GCM-256',
     },
   };
@@ -156,7 +180,13 @@ export const uploadFile = async (
     throw new Error(error.error?.message || 'Failed to upload file');
   }
 
-  return response.json();
+  const uploadedFile = await response.json();
+
+  // Set file permissions to "Anyone with link"
+  await setFilePublic(accessToken, uploadedFile.id);
+
+  // Fetch updated file info with webContentLink
+  return getFileById(accessToken, uploadedFile.id);
 };
 
 const arrayBufferToBase64 = (buffer: Uint8Array): string => {
@@ -256,6 +286,26 @@ export const deleteFile = async (accessToken: string, fileId: string): Promise<v
   if (!response.ok) {
     throw new Error('Failed to delete file');
   }
+};
+
+// Parse encryption metadata from filename
+export const parseEncryptedFilename = (filename: string): {
+  originalName: string;
+  salt: string;
+  iv: string;
+} | null => {
+  // Format: originalname_SALT_IV.encrypted
+  const match = filename.match(/^(.+)_([A-Za-z0-9+/=]+)_([A-Za-z0-9+/=]+)\.encrypted$/);
+  
+  if (!match) {
+    return null;
+  }
+
+  return {
+    originalName: match[1],
+    salt: match[2],
+    iv: match[3],
+  };
 };
 
 export const formatBytes = (bytes: number): string => {
