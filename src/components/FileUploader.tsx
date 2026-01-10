@@ -57,8 +57,8 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
       return;
     }
 
-    if (encryptionKey.length < 8) {
-      setError('Encryption key must be at least 8 characters for security');
+    if (encryptionKey.length < 3) {
+      setError('Encryption key must be at least 3 characters');
       return;
     }
 
@@ -201,13 +201,13 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
           <Input
             id="encryptionKey"
             type="password"
-            placeholder="Enter a strong encryption key"
+            placeholder="Enter your encryption key (e.g., saksham)"
             value={encryptionKey}
             onChange={(e) => setEncryptionKey(e.target.value)}
             disabled={isUploading}
           />
           <p className="text-xs text-muted-foreground">
-            Minimum 8 characters. Use a strong, memorable passphrase.
+            Minimum 3 characters. All characters allowed (letters, numbers, symbols, spaces).
           </p>
         </div>
 
