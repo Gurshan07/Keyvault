@@ -15,13 +15,19 @@ declare const google: {
 
 // Google Client ID - This is a publishable key, safe to include in client code
 // For Vercel deployment, set VITE_GOOGLE_CLIENT_ID environment variable
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID 
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/drive.appdata',
   'https://www.googleapis.com/auth/userinfo.profile',
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');
+
+// Storage keys
+const STORAGE_KEYS = {
+  ACCESS_TOKEN: 'keyvault_access_token',
+  USER: 'keyvault_user',
+};
 
 export interface GoogleUser {
   id: string;
@@ -38,8 +44,40 @@ export interface AuthState {
 
 type TokenClient = ReturnType<typeof google.accounts.oauth2.initTokenClient>;
 let tokenClient: TokenClient | null = null;
-let accessToken: string | null = null;
 let isScriptLoaded = false;
+
+// Load stored auth data from localStorage
+const loadStoredAuth = (): { accessToken: string | null; user: GoogleUser | null } => {
+  try {
+    const accessToken = localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+    const userJson = localStorage.getItem(STORAGE_KEYS.USER);
+    const user = userJson ? JSON.parse(userJson) : null;
+    return { accessToken, user };
+  } catch (error) {
+    console.error('Failed to load stored auth:', error);
+    return { accessToken: null, user: null };
+  }
+};
+
+// Save auth data to localStorage
+const saveAuth = (accessToken: string, user: GoogleUser): void => {
+  try {
+    localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, accessToken);
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+  } catch (error) {
+    console.error('Failed to save auth:', error);
+  }
+};
+
+// Clear auth data from localStorage
+const clearAuth = (): void => {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.ACCESS_TOKEN);
+    localStorage.removeItem(STORAGE_KEYS.USER);
+  } catch (error) {
+    console.error('Failed to clear auth:', error);
+  }
+};
 
 const loadGoogleScript = (): Promise<void> => {
   return new Promise((resolve, reject) => {
@@ -105,7 +143,7 @@ export const signIn = (): Promise<{ accessToken: string; user: GoogleUser }> => 
         return;
       }
 
-      accessToken = response.access_token;
+      const accessToken = response.access_token;
       
       try {
         const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -124,6 +162,9 @@ export const signIn = (): Promise<{ accessToken: string; user: GoogleUser }> => 
           picture: userData.picture,
         };
         
+        // Save to localStorage
+        saveAuth(accessToken, user);
+        
         resolve({ accessToken, user });
       } catch (error) {
         reject(error);
@@ -135,15 +176,27 @@ export const signIn = (): Promise<{ accessToken: string; user: GoogleUser }> => 
 };
 
 export const signOut = (): void => {
+  const { accessToken } = loadStoredAuth();
+  
   if (accessToken) {
     google.accounts.oauth2.revoke(accessToken, () => {
-      accessToken = null;
+      clearAuth();
     });
+  } else {
+    clearAuth();
   }
 };
 
-export const getAccessToken = (): string | null => accessToken;
+export const getAccessToken = (): string | null => {
+  const { accessToken } = loadStoredAuth();
+  return accessToken;
+};
 
-export const setAccessToken = (token: string): void => {
-  accessToken = token;
+export const getStoredUser = (): GoogleUser | null => {
+  const { user } = loadStoredAuth();
+  return user;
+};
+
+export const getStoredAuth = (): { accessToken: string | null; user: GoogleUser | null } => {
+  return loadStoredAuth();
 };

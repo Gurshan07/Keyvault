@@ -4,7 +4,7 @@ import {
   signIn as googleSignIn, 
   signOut as googleSignOut,
   GoogleUser,
-  setAccessToken
+  getStoredAuth
 } from '@/lib/google-auth';
 
 interface AuthContextType {
@@ -29,6 +29,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const init = async () => {
       try {
+        // Load stored auth data first
+        const { accessToken: storedToken, user: storedUser } = getStoredAuth();
+        
+        if (storedToken && storedUser) {
+          setToken(storedToken);
+          setUser(storedUser);
+        }
+
+        // Then initialize Google Auth
         await initializeGoogleAuth();
         setIsInitialized(true);
       } catch (err) {
@@ -53,7 +62,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const { accessToken: token, user: userData } = await googleSignIn();
       setToken(token);
-      setAccessToken(token);
       setUser(userData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to sign in');
