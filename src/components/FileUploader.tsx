@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Upload, Key, AlertTriangle, Check, Loader2, Lock, Copy } from 'lucide-react';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Upload, Key, AlertTriangle, Check, Loader2, Lock, Copy, Unlock } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { uploadFile, DriveFile } from '@/lib/google-drive';
 import { useToast } from '@/hooks/use-toast';
@@ -17,6 +18,7 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
   const { accessToken, user } = useAuth();
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
+  const [uploadMode, setUploadMode] = useState<'public' | 'encrypted'>('public');
   const [encryptionKey, setEncryptionKey] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<DriveFile | null>(null);
@@ -52,13 +54,13 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
   }, []);
 
   const handleUpload = async () => {
-    if (!file || !encryptionKey || !accessToken || !user) {
-      setError('Please select a file and enter an encryption key');
+    if (!file || !accessToken || !user) {
+      setError('Please select a file');
       return;
     }
 
-    if (encryptionKey.length < 3) {
-      setError('Encryption key must be at least 3 characters');
+    if (uploadMode === 'encrypted' && encryptionKey.length < 5) {
+      setError('Encryption key must be at least 5 characters');
       return;
     }
 
@@ -66,14 +68,16 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
     setError(null);
 
     try {
-      // Upload and encrypt file
-      const uploaded = await uploadFile(accessToken, file, encryptionKey, user.id);
+      const keyToUse = uploadMode === 'encrypted' ? encryptionKey : null;
+      const uploaded = await uploadFile(accessToken, file, keyToUse, user.id);
       
       setUploadedFile(uploaded);
       
       toast({
-        title: 'File encrypted and uploaded!',
-        description: 'Your file is securely stored in your Google Drive.',
+        title: uploadMode === 'encrypted' ? 'File encrypted and uploaded!' : 'File uploaded!',
+        description: uploadMode === 'encrypted' 
+          ? 'Your file is encrypted and stored securely.' 
+          : 'Your file is publicly accessible.',
       });
 
       onUploadComplete?.(uploaded);
@@ -86,6 +90,7 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
 
   const resetForm = () => {
     setFile(null);
+    setUploadMode('public');
     setEncryptionKey('');
     setUploadedFile(null);
     setError(null);
@@ -93,6 +98,7 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
 
   if (uploadedFile) {
     const shareUrl = uploadedFile.webContentLink || uploadedFile.webViewLink || `https://drive.google.com/file/d/${uploadedFile.id}/view`;
+    const isEncrypted = uploadedFile.appProperties?.encrypted === 'true';
     
     return (
       <Card className="bg-card">
@@ -104,48 +110,61 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-lg bg-accent p-4">
-            <p className="text-sm font-medium mb-2">File: {uploadedFile.appProperties?.originalName || uploadedFile.name}</p>
+            <p className="text-sm font-medium mb-2">
+              File: {uploadedFile.appProperties?.originalName || uploadedFile.name}
+            </p>
             <p className="text-sm text-muted-foreground mb-4">
-              Encrypted and saved in your Keyvault folder
+              {isEncrypted ? 'Encrypted and ' : ''}Saved in your Keyvault folder
             </p>
             
-            <div className="space-y-2">
-              <Label className="text-xs">Share this Google Drive link:</Label>
-              <div className="flex gap-2">
-                <Input
-                  value={shareUrl}
-                  readOnly
-                  className="font-mono text-xs"
-                />
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    navigator.clipboard.writeText(shareUrl);
-                    toast({
-                      title: 'Link copied!',
-                      description: 'Share this link along with your encryption key.',
-                    });
-                  }}
-                >
-                  <Copy className="h-4 w-4" />
-                </Button>
+            <div className="space-y-3">
+              <div>
+                <Label className="text-xs flex items-center gap-1 mb-1">
+                  {isEncrypted ? <Lock className="h-3 w-3" /> : <Unlock className="h-3 w-3" />}
+                  {isEncrypted ? 'Encrypted Download Link' : 'Public Download Link'}
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={`${window.location.origin}/download/${uploadedFile.id}`}
+                    readOnly
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/download/${uploadedFile.id}`);
+                      toast({
+                        title: 'Link copied!',
+                        description: isEncrypted ? 'Share with encryption key for access.' : 'Anyone can download this file.',
+                      });
+                    }}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-            </div>
-            
-            <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted p-3 rounded mt-3">
-              <Lock className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <p>
-                Share this link AND your encryption key with anyone who needs to download the file. 
-                They can decrypt it at <code className="bg-background px-1 rounded">/download</code>
-              </p>
+
+              {isEncrypted && (
+                <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted p-3 rounded">
+                  <Lock className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium mb-1">Share these with the recipient:</p>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      <li>The download link above</li>
+                      <li>Your encryption key: <code className="bg-background px-1 rounded">{encryptionKey}</code></li>
+                    </ul>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           
           <Alert>
-            <AlertTriangle className="h-4 w-4" />
+            {isEncrypted ? <Lock className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
             <AlertDescription>
-              The file is publicly accessible but remains encrypted. Anyone with the link AND the correct 
-              encryption key can download and decrypt it.
+              {isEncrypted 
+                ? 'File is encrypted with AES-256. Only those with the correct key can decrypt it.'
+                : 'This file is publicly accessible. Anyone with the link can download it directly.'}
             </AlertDescription>
           </Alert>
 
@@ -162,10 +181,10 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-lg">
           <Upload className="h-5 w-5 text-primary" />
-          Upload & Encrypt File
+          Upload File
         </CardTitle>
         <CardDescription>
-          Upload a file to your Google Drive with end-to-end encryption
+          Upload files to your Google Drive with optional encryption
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -176,12 +195,35 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
           </Alert>
         )}
 
-        <Alert>
-          <Lock className="h-4 w-4" />
-          <AlertDescription>
-            Your files are encrypted client-side before upload. Only you can decrypt them with your key.
-          </AlertDescription>
-        </Alert>
+        <div className="space-y-3">
+          <Label>Upload Mode</Label>
+          <RadioGroup value={uploadMode} onValueChange={(v) => setUploadMode(v as 'public' | 'encrypted')}>
+            <div className="flex items-center space-x-2 border rounded-lg p-3 hover:bg-accent transition-colors">
+              <RadioGroupItem value="public" id="public" />
+              <Label htmlFor="public" className="flex-1 cursor-pointer">
+                <div className="flex items-center gap-2">
+                  <Unlock className="h-4 w-4" />
+                  <div>
+                    <p className="font-medium">Public Download</p>
+                    <p className="text-xs text-muted-foreground">Anyone with link can download directly (no key needed)</p>
+                  </div>
+                </div>
+              </Label>
+            </div>
+            <div className="flex items-center space-x-2 border rounded-lg p-3 hover:bg-accent transition-colors">
+              <RadioGroupItem value="encrypted" id="encrypted" />
+              <Label htmlFor="encrypted" className="flex-1 cursor-pointer">
+                <div className="flex items-center gap-2">
+                  <Lock className="h-4 w-4" />
+                  <div>
+                    <p className="font-medium">Encrypted Download</p>
+                    <p className="text-xs text-muted-foreground">Requires encryption key to download and decrypt</p>
+                  </div>
+                </div>
+              </Label>
+            </div>
+          </RadioGroup>
+        </div>
 
         <div
           className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
@@ -221,41 +263,52 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
           )}
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="encryptionKey" className="flex items-center gap-2">
-            <Key className="h-4 w-4" />
-            Encryption Key
-          </Label>
-          <Input
-            id="encryptionKey"
-            type="password"
-            placeholder="Enter your encryption key (e.g., saksham)"
-            value={encryptionKey}
-            onChange={(e) => setEncryptionKey(e.target.value)}
-            disabled={isUploading}
-          />
-          <p className="text-xs text-muted-foreground">
-            Minimum 3 characters. All characters allowed (letters, numbers, symbols, spaces).
-          </p>
-        </div>
+        {uploadMode === 'encrypted' && (
+          <div className="space-y-2">
+            <Label htmlFor="encryptionKey" className="flex items-center gap-2">
+              <Key className="h-4 w-4" />
+              Encryption Key
+            </Label>
+            <Input
+              id="encryptionKey"
+              type="password"
+              placeholder="Enter your encryption key (min 5 characters)"
+              value={encryptionKey}
+              onChange={(e) => setEncryptionKey(e.target.value)}
+              disabled={isUploading}
+            />
+            <p className="text-xs text-muted-foreground">
+              Minimum 5 characters. Remember this key - you'll need it to decrypt the file.
+            </p>
+          </div>
+        )}
 
         <Button
           onClick={handleUpload}
-          disabled={!file || !encryptionKey || isUploading}
+          disabled={!file || (uploadMode === 'encrypted' && encryptionKey.length < 5) || isUploading}
           className="w-full"
         >
           {isUploading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Encrypting & Uploading...
+              {uploadMode === 'encrypted' ? 'Encrypting & Uploading...' : 'Uploading...'}
             </>
           ) : (
             <>
-              <Lock className="mr-2 h-4 w-4" />
-              Encrypt & Upload
+              {uploadMode === 'encrypted' ? <Lock className="mr-2 h-4 w-4" /> : <Upload className="mr-2 h-4 w-4" />}
+              {uploadMode === 'encrypted' ? 'Encrypt & Upload' : 'Upload'}
             </>
           )}
         </Button>
+
+        <Alert>
+          {uploadMode === 'encrypted' ? <Lock className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+          <AlertDescription className="text-xs">
+            {uploadMode === 'encrypted' 
+              ? 'Files are encrypted client-side with AES-256 before upload. Your Drive is secure.'
+              : 'Files uploaded in public mode can be downloaded by anyone with the link without a key.'}
+          </AlertDescription>
+        </Alert>
       </CardContent>
     </Card>
   );
