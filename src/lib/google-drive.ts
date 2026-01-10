@@ -328,3 +328,29 @@ export const formatBytes = (bytes: number): string => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 };
+
+/* ─────────────────── Storage Quota ─────────────────── */
+
+export const getStorageQuota = async (
+  accessToken: string
+): Promise<StorageQuota> => {
+  const response = await fetch(
+    `${DRIVE_API_BASE}/about?fields=storageQuota`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch storage quota');
+  }
+
+  const data = await response.json();
+
+  return {
+    limit: Number(data.storageQuota.limit ?? 0),
+    usage: Number(data.storageQuota.usage ?? 0),
+    usageInDrive: Number(data.storageQuota.usageInDrive ?? 0),
+    usageInDriveTrash: Number(data.storageQuota.usageInDriveTrash ?? 0),
+  };
+};
