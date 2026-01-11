@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { 
   Table, 
   TableBody, 
@@ -20,9 +21,9 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { FolderOpen, Copy, Trash2, ExternalLink, Loader2 } from 'lucide-react';
+import { FolderOpen, Copy, Trash2, Download, Loader2, Key } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { getUserFiles, deleteFile, formatBytes, DriveFile } from '@/lib/google-drive';
+import { getUserFiles, deleteFile, formatBytes, downloadFileFromDrive } from '@/lib/google-drive';
 import { useToast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -30,18 +31,32 @@ interface MyFilesCardProps {
   refreshTrigger?: number;
 }
 
+interface FileItem {
+  driveFileId: string;
+  filename: string;
+  size: string;
+  createdTime: string;
+  policies: {
+    expiresAt?: number;
+    maxDownloads?: number;
+    selfDestruct?: boolean;
+  };
+}
+
 export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
-  const { accessToken, user } = useAuth();
+  const { accessToken } = useAuth();
   const { toast } = useToast();
-  const [files, setFiles] = useState<DriveFile[]>([]);
+  const [files, setFiles] = useState<FileItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [decryptionKeys, setDecryptionKeys] = useState<Record<string, string>>({});
 
   const fetchFiles = async () => {
-    if (!accessToken || !user) return;
+    if (!accessToken) return;
 
     try {
-      const userFiles = await getUserFiles(accessToken, user.id);
+      const userFiles = await getUserFiles(accessToken);
       setFiles(userFiles);
     } catch (err) {
       console.error('Failed to fetch files:', err);
@@ -52,18 +67,18 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
 
   useEffect(() => {
     fetchFiles();
-  }, [accessToken, user, refreshTrigger]);
+  }, [accessToken, refreshTrigger]);
 
-  const handleDelete = async (fileId: string) => {
+  const handleDelete = async (fileId: string, filename: string) => {
     if (!accessToken) return;
 
     setDeletingId(fileId);
     try {
       await deleteFile(accessToken, fileId);
-      setFiles(files.filter(f => f.id !== fileId));
+      setFiles(files.filter(f => f.driveFileId !== fileId));
       toast({
         title: 'File deleted',
-        description: 'The file has been removed from your Drive.',
+        description: `${filename} has been removed from your Drive.`,
       });
     } catch (err) {
       toast({
@@ -76,15 +91,65 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
     }
   };
 
-  const copyShareLink = async (file: DriveFile) => {
-    const fullKey = file.appProperties?.fullKey;
-    if (!fullKey) return;
+  const handleDownload = async (fileId: string, filename: string) => {
+    const key = decryptionKeys[fileId];
+    
+    if (!key || key.length < 5) {
+      toast({
+        title: 'Key required',
+        description: 'Please enter the decryption key for this file',
+        variant: 'destructive',
+      });
+      return;
+    }
 
-    const shareUrl = `${window.location.origin}/download/${fullKey}`;
+    setDownloadingId(fileId);
+
+    try {
+      const { file, filename: decryptedFilename } = await downloadFileFromDrive(fileId, key);
+
+      // Trigger download
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = decryptedFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: 'Download successful!',
+        description: `${decryptedFilename} has been downloaded.`,
+      });
+    } catch (err) {
+      toast({
+        title: 'Download failed',
+        description: err instanceof Error ? err.message : 'Wrong decryption key or file corrupted',
+        variant: 'destructive',
+      });
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const copyShareLink = async (fileId: string, filename: string) => {
+    const key = decryptionKeys[fileId];
+    
+    if (!key || key.length < 5) {
+      toast({
+        title: 'Key required',
+        description: 'Enter the decryption key first, then copy the share link',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const shareUrl = `${window.location.origin}/f/${fileId}#key=${key}`;
     await navigator.clipboard.writeText(shareUrl);
     toast({
       title: 'Link copied!',
-      description: 'Share this link with anyone.',
+      description: 'Share this link - the key is included in the URL.',
     });
   };
 
@@ -94,7 +159,7 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <FolderOpen className="h-5 w-5 text-primary" />
-            My Shared Files
+            My Encrypted Files
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -113,7 +178,7 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-lg">
           <FolderOpen className="h-5 w-5 text-primary" />
-          My Shared Files
+          My Encrypted Files
           {files.length > 0 && (
             <span className="ml-auto text-sm font-normal text-muted-foreground">
               {files.length} file{files.length !== 1 ? 's' : ''}
@@ -125,7 +190,7 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
         {files.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
             <FolderOpen className="mx-auto h-12 w-12 mb-4 opacity-50" />
-            <p>No files shared yet</p>
+            <p>No files uploaded yet</p>
             <p className="text-sm">Upload a file to get started</p>
           </div>
         ) : (
@@ -134,47 +199,55 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
-                  <TableHead>Key</TableHead>
                   <TableHead>Size</TableHead>
+                  <TableHead>Decryption Key</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {files.map((file) => (
-                  <TableRow key={file.id}>
+                  <TableRow key={file.driveFileId}>
                     <TableCell className="font-medium max-w-[200px] truncate">
-                      {file.name}
-                    </TableCell>
-                    <TableCell>
-                      <code className="text-xs bg-muted px-2 py-1 rounded">
-                        {file.appProperties?.shareKey || '-'}
-                      </code>
+                      {file.filename}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {formatBytes(parseInt(file.size || '0'))}
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="password"
+                        placeholder="Enter key"
+                        value={decryptionKeys[file.driveFileId] || ''}
+                        onChange={(e) => setDecryptionKeys(prev => ({
+                          ...prev,
+                          [file.driveFileId]: e.target.value
+                        }))}
+                        className="w-32 text-xs"
+                      />
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => copyShareLink(file)}
+                          onClick={() => handleDownload(file.driveFileId, file.filename)}
+                          title="Download & decrypt"
+                          disabled={downloadingId === file.driveFileId}
+                        >
+                          {downloadingId === file.driveFileId ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Download className="h-4 w-4" />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => copyShareLink(file.driveFileId, file.filename)}
                           title="Copy share link"
                         >
                           <Copy className="h-4 w-4" />
                         </Button>
-                        {file.webViewLink && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            asChild
-                            title="Open in Drive"
-                          >
-                            <a href={file.webViewLink} target="_blank" rel="noopener noreferrer">
-                              <ExternalLink className="h-4 w-4" />
-                            </a>
-                          </Button>
-                        )}
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
                             <Button
@@ -182,8 +255,9 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
                               size="icon"
                               className="text-destructive hover:text-destructive"
                               title="Delete file"
+                              disabled={deletingId === file.driveFileId}
                             >
-                              {deletingId === file.id ? (
+                              {deletingId === file.driveFileId ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
                                 <Trash2 className="h-4 w-4" />
@@ -194,14 +268,14 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
                             <AlertDialogHeader>
                               <AlertDialogTitle>Delete file?</AlertDialogTitle>
                               <AlertDialogDescription>
-                                This will permanently delete "{file.name}" from your Google Drive. 
+                                This will permanently delete "{file.filename}" from your Google Drive. 
                                 Anyone with the share link will no longer be able to access it.
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
                               <AlertDialogCancel>Cancel</AlertDialogCancel>
                               <AlertDialogAction
-                                onClick={() => handleDelete(file.id)}
+                                onClick={() => handleDelete(file.driveFileId, file.filename)}
                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                               >
                                 Delete
