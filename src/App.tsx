@@ -19,6 +19,7 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
+            <Route path="/f/:fileId" element={<DownloadPage />} />
             <Route path="/download" element={<DownloadPage />} />
             <Route path="/download/:key" element={<DownloadPage />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

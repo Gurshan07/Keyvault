@@ -58,6 +58,10 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
     try {
       const userFiles = await getUserFiles(accessToken);
       setFiles(userFiles);
+      
+      // Load stored keys from localStorage
+      const keyMap = JSON.parse(localStorage.getItem('keyvault_keys') || '{}');
+      setDecryptionKeys(keyMap);
     } catch (err) {
       console.error('Failed to fetch files:', err);
     } finally {
@@ -94,10 +98,10 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
   const handleDownload = async (fileId: string, filename: string) => {
     const key = decryptionKeys[fileId];
     
-    if (!key || key.length < 5) {
+    if (!key || key.trim().length < 5) {
       toast({
         title: 'Key required',
-        description: 'Please enter the decryption key for this file',
+        description: 'Please enter the decryption key (minimum 5 characters)',
         variant: 'destructive',
       });
       return;
@@ -106,7 +110,7 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
     setDownloadingId(fileId);
 
     try {
-      const { file, filename: decryptedFilename } = await downloadFileFromDrive(fileId, key);
+      const { file, filename: decryptedFilename } = await downloadFileFromDrive(fileId, key.trim());
 
       // Trigger download
       const url = URL.createObjectURL(file);
@@ -136,16 +140,16 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
   const copyShareLink = async (fileId: string, filename: string) => {
     const key = decryptionKeys[fileId];
     
-    if (!key || key.length < 5) {
+    if (!key || key.trim().length < 5) {
       toast({
         title: 'Key required',
-        description: 'Enter the decryption key first, then copy the share link',
+        description: 'Enter the decryption key first (minimum 5 characters)',
         variant: 'destructive',
       });
       return;
     }
 
-    const shareUrl = `${window.location.origin}/f/${fileId}#key=${key}`;
+    const shareUrl = `${window.location.origin}/f/${fileId}#key=${encodeURIComponent(key.trim())}`;
     await navigator.clipboard.writeText(shareUrl);
     toast({
       title: 'Link copied!',
@@ -215,14 +219,20 @@ export const MyFilesCard = ({ refreshTrigger }: MyFilesCardProps) => {
                     </TableCell>
                     <TableCell>
                       <Input
-                        type="password"
+                        type="text"
                         placeholder="Enter key"
                         value={decryptionKeys[file.driveFileId] || ''}
-                        onChange={(e) => setDecryptionKeys(prev => ({
-                          ...prev,
-                          [file.driveFileId]: e.target.value
-                        }))}
+                        onChange={(e) => {
+                          const newKeys = {
+                            ...decryptionKeys,
+                            [file.driveFileId]: e.target.value
+                          };
+                          setDecryptionKeys(newKeys);
+                          // Save to localStorage
+                          localStorage.setItem('keyvault_keys', JSON.stringify(newKeys));
+                        }}
                         className="w-32 text-xs"
+                        readOnly={!!decryptionKeys[file.driveFileId]}
                       />
                     </TableCell>
                     <TableCell className="text-right">

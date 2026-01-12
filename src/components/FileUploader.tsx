@@ -80,6 +80,11 @@ export const FileUploader = ({ onUploadComplete }: FileUploaderProps) => {
         }
       );
       
+      // Store the key-to-fileId mapping in localStorage
+      const keyMap = JSON.parse(localStorage.getItem('keyvault_keys') || '{}');
+      keyMap[result.driveFileId] = encryptionKey;
+      localStorage.setItem('keyvault_keys', JSON.stringify(keyMap));
+      
       setUploadResult(result);
       
       toast({

@@ -11,7 +11,8 @@ import { downloadFileFromDrive, parseShareUrl } from '@/lib/google-drive';
 import { useToast } from '@/hooks/use-toast';
 
 export const DownloadPage = () => {
-  const { fileId } = useParams<{ fileId: string }>();
+  const params = useParams<{ fileId?: string; key?: string }>();
+  const fileId = params.fileId || params.key; // Support both /f/:fileId and /download/:key routes
   const { toast } = useToast();
   
   // Get key from URL fragment
@@ -20,25 +21,37 @@ export const DownloadPage = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    console.log('Route params:', params);
+    console.log('File ID:', fileId);
+    
     // Parse key from URL fragment (#key=iron-sparrow-echo)
     const hash = window.location.hash;
+    console.log('URL hash:', hash);
+    
     if (hash) {
       const params = new URLSearchParams(hash.substring(1));
       const key = params.get('key');
+      console.log('Extracted key:', key);
+      
       if (key) {
         setDecryptionKey(key);
+        // Auto-download if key is in URL
+        // Uncomment below to enable auto-download
+        // setTimeout(() => handleDownload(), 500);
       }
     }
   }, []);
 
   const handleDownload = async () => {
-    if (!fileId || !decryptionKey) {
-      setError('Please enter the decryption key');
+    console.log('handleDownload called with fileId:', fileId, 'key:', decryptionKey);
+    
+    if (!fileId) {
+      setError('No file ID provided in URL');
       return;
     }
 
-    if (decryptionKey.length < 5) {
-      setError('Decryption key must be at least 5 characters');
+    if (!decryptionKey || decryptionKey.trim().length < 5) {
+      setError('Please enter a valid decryption key (minimum 5 characters)');
       return;
     }
 
@@ -46,9 +59,10 @@ export const DownloadPage = () => {
     setError(null);
 
     try {
+      console.log('Attempting to download file:', fileId);
       const { file, filename, policies } = await downloadFileFromDrive(
         fileId,
-        decryptionKey
+        decryptionKey.trim()
       );
 
       // Trigger download
@@ -66,8 +80,10 @@ export const DownloadPage = () => {
         description: `${filename} has been decrypted and downloaded.`,
       });
 
+      // Clear key after successful download
       setDecryptionKey('');
     } catch (err) {
+      console.error('Download error:', err);
       setError(
         err instanceof Error 
           ? err.message 
@@ -137,7 +153,7 @@ export const DownloadPage = () => {
 
               <Button
                 onClick={handleDownload}
-                disabled={!decryptionKey || decryptionKey.length < 5 || isDownloading}
+                disabled={!decryptionKey || decryptionKey.trim().length < 5 || isDownloading}
                 className="w-full"
               >
                 {isDownloading ? (
