@@ -17,8 +17,7 @@ declare const google: {
 // For Vercel deployment, set VITE_GOOGLE_CLIENT_ID environment variable
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 const SCOPES = [
-  'https://www.googleapis.com/auth/drive.file',
-  'https://www.googleapis.com/auth/drive.appdata',
+  'https://www.googleapis.com/auth/drive', // Full Drive access (needed for permissions)
   'https://www.googleapis.com/auth/userinfo.profile',
   'https://www.googleapis.com/auth/userinfo.email',
 ].join(' ');

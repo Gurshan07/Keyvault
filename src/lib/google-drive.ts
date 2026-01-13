@@ -35,7 +35,7 @@ export interface Policies {
 // FILENAME ENCODING (Metadata in Filename)
 // ============================================================================
 
-const encodeMetadataInFilename = (
+export const encodeMetadataInFilename = (
   originalName: string,
   salt: Uint8Array,
   iv: Uint8Array,
@@ -49,7 +49,7 @@ const encodeMetadataInFilename = (
   return `${originalName}_${saltB64}_${ivB64}_${policiesB64}.encrypted`;
 };
 
-const decodeMetadataFromFilename = (
+export const decodeMetadataFromFilename = (
   filename: string
 ): {
   originalName: string;
@@ -106,15 +106,60 @@ export const uploadFileToDrive = async (
   // 2. Create filename with metadata
   const filename = encodeMetadataInFilename(file.name, salt, iv, policies);
   
-  // 3. Upload to Drive
+  // 3. Get or create Keyvault folder (optional - comment out to upload to root)
+  let folderId: string | undefined;
+  try {
+    const query = "name='Keyvault' and mimeType='application/vnd.google-apps.folder' and trashed=false";
+    const searchResponse = await fetch(
+      `${DRIVE_API_BASE}/files?q=${encodeURIComponent(query)}&fields=files(id)`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    
+    if (searchResponse.ok) {
+      const data = await searchResponse.json();
+      if (data.files && data.files.length > 0) {
+        folderId = data.files[0].id;
+      } else {
+        // Create folder
+        const createResponse = await fetch(
+          `${DRIVE_API_BASE}/files`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              name: 'Keyvault',
+              mimeType: 'application/vnd.google-apps.folder',
+            }),
+          }
+        );
+        
+        if (createResponse.ok) {
+          const folder = await createResponse.json();
+          folderId = folder.id;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to create/find folder, uploading to root:', err);
+  }
+  
+  // 4. Upload file
   const boundary = '-------314159265358979323846';
   const delimiter = `\r\n--${boundary}\r\n`;
   const closeDelimiter = `\r\n--${boundary}--`;
   
-  const metadata = {
+  const metadata: any = {
     name: filename,
     description: `Keyvault encrypted file - Key hint: ${humanKey.substring(0, 4)}...`,
   };
+  
+  // Add parent folder if exists
+  if (folderId) {
+    metadata.parents = [folderId];
+  }
   
   const fileBuffer = await encryptedData.arrayBuffer();
   const fileBytes = new Uint8Array(fileBuffer);
@@ -148,29 +193,76 @@ export const uploadFileToDrive = async (
   );
   
   if (!response.ok) {
-    throw new Error('Upload failed');
+    const errorText = await response.text();
+    console.error('Upload failed:', errorText);
+    throw new Error('Upload failed: ' + errorText);
   }
   
   const uploadResult = await response.json();
   const driveFileId = uploadResult.id;
   
-  // 4. Make file publicly readable
-  await fetch(
-    `${DRIVE_API_BASE}/files/${driveFileId}/permissions`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        role: 'reader',
-        type: 'anyone',
-      }),
-    }
-  );
+  console.log('File uploaded with ID:', driveFileId);
   
-  // 5. Generate share URL
+  // 5. Make file publicly readable (CRITICAL FIX)
+  console.log('Setting file permissions to public...');
+  try {
+    const permissionResponse = await fetch(
+      `${DRIVE_API_BASE}/files/${driveFileId}/permissions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role: 'reader',
+          type: 'anyone',
+        }),
+      }
+    );
+    
+    const permissionStatus = permissionResponse.status;
+    console.log('Permission response status:', permissionStatus);
+    
+    if (!permissionResponse.ok) {
+      const errorText = await permissionResponse.text();
+      console.error('Failed to set permissions:', errorText);
+      
+      // Parse error to see if it's a scope issue
+      try {
+        const errorJson = JSON.parse(errorText);
+        console.error('Permission error details:', errorJson);
+      } catch (e) {
+        console.error('Raw error:', errorText);
+      }
+      
+      throw new Error('Failed to make file public - insufficient permissions. Please sign out and sign in again.');
+    }
+    
+    console.log('File made public successfully');
+    
+    // Wait a moment for Google to process the permission
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Verify the file is now public
+    console.log('Verifying file is publicly accessible...');
+    const verifyResponse = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFileId}?fields=name`,
+      { method: 'GET' }
+    );
+    
+    if (verifyResponse.ok) {
+      console.log('✓ File is publicly accessible');
+    } else {
+      console.warn('⚠ File may not be publicly accessible yet');
+    }
+    
+  } catch (permErr) {
+    console.error('Permission error:', permErr);
+    throw new Error('Failed to make file public. Please sign out and sign in again with full Drive permissions, or manually share the file in Google Drive.');
+  }
+  
+  // 6. Generate share URL (using /f/ route)
   const shareUrl = `${window.location.origin}/f/${driveFileId}#key=${humanKey}`;
   
   return {
@@ -181,59 +273,123 @@ export const uploadFileToDrive = async (
 };
 
 // ============================================================================
-// DOWNLOAD (No Auth Required)
+// DOWNLOAD (No Auth Required for public files, OR with auth for own files)
 // ============================================================================
 
 export const downloadFileFromDrive = async (
   driveFileId: string,
-  humanKey: string
+  humanKey: string,
+  accessToken?: string // Optional: use if downloading own file
 ): Promise<{
   file: Blob;
   filename: string;
   policies: Policies;
 }> => {
-  // 1. Get file metadata (public access)
-  const metadataResponse = await fetch(
-    `${DRIVE_API_BASE}/files/${driveFileId}?fields=name,size`,
-    { method: 'GET' }
-  );
+  console.log('Downloading file:', driveFileId, 'with auth:', !!accessToken);
+  
+  // 1. Get file metadata
+  let metadataResponse;
+  
+  if (accessToken) {
+    // Authenticated access (for own files)
+    metadataResponse = await fetch(
+      `${DRIVE_API_BASE}/files/${driveFileId}?fields=name,size`,
+      { 
+        method: 'GET',
+        headers: { Authorization: `Bearer ${accessToken}` }
+      }
+    );
+  } else {
+    // Public access (for shared files)
+    metadataResponse = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFileId}?fields=name,size`,
+      { method: 'GET' }
+    );
+  }
+  
+  // Try with supportsAllDrives parameter if first attempt fails
+  if (!metadataResponse.ok && !accessToken) {
+    metadataResponse = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFileId}?fields=name,size&supportsAllDrives=true`,
+      { method: 'GET' }
+    );
+  }
   
   if (!metadataResponse.ok) {
-    throw new Error('File not found or not publicly accessible');
+    const errorText = await metadataResponse.text();
+    console.error('Metadata fetch failed:', errorText);
+    
+    if (accessToken) {
+      throw new Error('File not found in your Drive.');
+    } else {
+      throw new Error('File not found or not publicly accessible. The file owner needs to make it public.');
+    }
   }
   
   const metadata = await metadataResponse.json();
   const filename = metadata.name;
   
+  console.log('File metadata:', metadata);
+  
   // 2. Parse metadata from filename
   const fileInfo = decodeMetadataFromFilename(filename);
   
   if (!fileInfo) {
-    throw new Error('Invalid file format');
+    throw new Error('Invalid file format - metadata could not be parsed from filename');
   }
+  
+  console.log('Parsed file info:', fileInfo);
   
   // 3. Check policies client-side
   if (fileInfo.policies.expiresAt && Date.now() > fileInfo.policies.expiresAt) {
     throw new Error('File has expired');
   }
   
-  // 4. Download encrypted file (public access)
-  const fileResponse = await fetch(
-    `${DRIVE_API_BASE}/files/${driveFileId}?alt=media`,
-    { method: 'GET' }
-  );
+  // 4. Download encrypted file
+  let fileResponse;
+  
+  if (accessToken) {
+    // Authenticated download
+    fileResponse = await fetch(
+      `${DRIVE_API_BASE}/files/${driveFileId}?alt=media`,
+      { 
+        method: 'GET',
+        headers: { Authorization: `Bearer ${accessToken}` }
+      }
+    );
+  } else {
+    // Public download
+    fileResponse = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
+      { method: 'GET' }
+    );
+    
+    // Try with supportsAllDrives if first attempt fails
+    if (!fileResponse.ok) {
+      fileResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media&supportsAllDrives=true`,
+        { method: 'GET' }
+      );
+    }
+  }
   
   if (!fileResponse.ok) {
-    throw new Error('Failed to download file');
+    const errorText = await fileResponse.text();
+    console.error('File download failed:', errorText);
+    throw new Error('Failed to download file. The file may not be publicly accessible.');
   }
   
   const encryptedData = await fileResponse.arrayBuffer();
+  console.log('Downloaded encrypted data:', encryptedData.byteLength, 'bytes');
   
   // 5. Decrypt
   const salt = base64ToUint8Array(fileInfo.salt);
   const iv = base64ToUint8Array(fileInfo.iv);
   
+  console.log('Decrypting with key...');
   const decryptedData = await decryptFile(encryptedData, humanKey, salt, iv);
+  
+  console.log('Decrypted data:', decryptedData.byteLength, 'bytes');
   
   return {
     file: new Blob([decryptedData]),
@@ -430,14 +586,3 @@ a.click();
 const files = await getUserFiles(accessToken);
 console.log('Your files:', files);
 */
-
-export default {
-  uploadFileToDrive,
-  downloadFileFromDrive,
-  getUserFiles,
-  deleteFile,
-  generateHumanKey,
-  parseShareUrl,
-  formatBytes,
-  getStorageQuota,
-};
